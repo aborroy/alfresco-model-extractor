@@ -12,7 +12,7 @@ Use this tool when upgrading an Alfresco installation that no longer supports a 
 
 ## Using
 
-Download the appropriate binary for your OS and architecture from [Releases](releases):
+Download the appropriate binary for your OS and architecture from [Releases](https://github.com/aborroy/alfresco-model-extractor/releases):
 
 - **macOS with Intel**: `alfresco-model-extractor_darwin_amd64`
 - **macOS with Silicon**: `alfresco-model-extractor_darwin_arm64`
