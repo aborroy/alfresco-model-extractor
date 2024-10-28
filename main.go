@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/xml"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -27,7 +29,7 @@ type Model struct {
 const modulePropertiesTmpl = `module.id={{.Name}}
 module.title={{.Name}}
 module.description={{.Name}}
-module.version=1.0.0
+module.version={{.Version}}
 `
 
 const moduleContextXmlTmpl = `<?xml version='1.0' encoding='UTF-8'?>
@@ -48,7 +50,53 @@ const moduleContextXmlTmpl = `<?xml version='1.0' encoding='UTF-8'?>
 
 type ModuleData struct {
 	Name       string
+	Version    string
 	ModelPaths []string
+}
+
+// Function to extract and parse module.properties from ZIP
+func getModuleVersion(zipReader *zip.ReadCloser, moduleName string) (string, error) {
+	propertiesPath := fmt.Sprintf("alfresco/module/%s/module.properties", moduleName)
+	for _, file := range zipReader.File {
+		if file.Name == propertiesPath {
+			rc, err := file.Open()
+			if err != nil {
+				return "", err
+			}
+			defer rc.Close()
+
+			scanner := bufio.NewScanner(rc)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.HasPrefix(line, "module.version=") {
+					return strings.TrimPrefix(line, "module.version="), nil
+				}
+			}
+			return "", scanner.Err()
+		}
+	}
+	return "1.0.0", nil // Default version if not found
+}
+
+// Function to increment version
+func incrementVersion(version string) string {
+	parts := strings.Split(version, ".")
+	if len(parts) < 3 {
+		// If version is incomplete, pad with zeros
+		for len(parts) < 3 {
+			parts = append(parts, "0")
+		}
+	}
+
+	// Try to increment the last number
+	if lastNum, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+		parts[len(parts)-1] = strconv.Itoa(lastNum + 1)
+	} else {
+		// If parsing fails, append .1
+		parts = append(parts, "1")
+	}
+
+	return strings.Join(parts, ".")
 }
 
 func main() {
@@ -70,6 +118,16 @@ func main() {
 		log.Fatalf("Failed to open ZIP file: %v", err)
 	}
 	defer reader.Close()
+
+	// Get current version from module.properties
+	currentVersion, err := getModuleVersion(reader, moduleName)
+	if err != nil {
+		log.Printf("Warning: Could not read current version: %v", err)
+		currentVersion = "1.0.0"
+	}
+
+	// Increment the version
+	newVersion := incrementVersion(currentVersion)
 
 	// Create temporary directory for XML files
 	tempDir, err := os.MkdirTemp("", "alfresco-models")
@@ -98,12 +156,13 @@ func main() {
 		log.Fatal("No Alfresco content model XML files found")
 	}
 
-	// Create JAR file with module structure
-	if err := createModuleJar(*outputJar, modelFiles, moduleName); err != nil {
+	// Create JAR file with module structure and new version
+	if err := createModuleJar(*outputJar, modelFiles, moduleName, newVersion); err != nil {
 		log.Fatalf("Failed to create JAR file: %v", err)
 	}
 
-	fmt.Printf("Successfully created JAR file %s with %d model files\n", *outputJar, len(modelFiles))
+	fmt.Printf("Successfully created JAR file %s with %d model files (version %s)\n", 
+		*outputJar, len(modelFiles), newVersion)
 }
 
 func cleanModuleName(filename string) string {
@@ -188,7 +247,7 @@ func createFileInZip(zipWriter *zip.Writer, name string, compress bool) (io.Writ
 	return zipWriter.CreateHeader(header)
 }
 
-func createModuleJar(jarPath string, files []string, moduleName string) error {
+func createModuleJar(jarPath string, files []string, moduleName, version string) error {
 	jarFile, err := os.Create(jarPath)
 	if err != nil {
 		return err
@@ -221,9 +280,10 @@ func createModuleJar(jarPath string, files []string, moduleName string) error {
 		"Built-By: %s\n"+
 		"Build-Jdk: 17.0.5\n"+
 		"Package: org.alfresco.module\n"+
-		"Implementation-Version: 1.0.0\n"+
+		"Implementation-Version: %s\n"+
 		"Implementation-Title: %s\n\n",
 		os.Getenv("USER"),
+		version,
 		moduleName))
 
 	manifestWriter, err := createFileInZip(zipWriter, "META-INF/MANIFEST.MF", false)
@@ -246,9 +306,10 @@ func createModuleJar(jarPath string, files []string, moduleName string) error {
 	// Sort model paths for consistency
 	sort.Strings(modelPaths)
 
-	// Prepare module data for templates
+	// Prepare module data for templates with version
 	moduleData := ModuleData{
 		Name:       moduleName,
+		Version:    version,
 		ModelPaths: modelPaths,
 	}
 
